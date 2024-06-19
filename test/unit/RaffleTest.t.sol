@@ -6,6 +6,7 @@ import {Raffle} from "../../src/Raffle.sol";
 import {Test, console} from "forge-std/Test.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {Vm} from "forge-std/Vm.sol";
+import {VRFCoordinatorV2Mock} from "../../lib/chainlink-brownie-contracts/contracts/src/v0.8/mocks/VRFCoordinatorV2Mock.sol";
 
 contract RaffleTest is Test {
     // Events
@@ -175,6 +176,51 @@ contract RaffleTest is Test {
         Raffle.RaffleState rState = raffle.getRaffleState();
 
         assert(uint256(requestId) > 0);
-        assert(uint256(rState)  ==  1);
+        assert(uint256(rState) == 1);
+    }
+
+    function testFulfillRandomWordsCanOnlyBePerfmoredAfterPerformUpkeep(
+        uint256 randomRequestId
+    ) public {
+        // Arrange
+        vm.expectRevert("nonexistent request");
+        VRFCoordinatorV2Mock(vrfCoordinator).fulfillRandomWords(
+            randomRequestId,
+            address(raffle)
+        );
+    }
+
+    function testFulfillRandomWordsWordsPicksAWinnerAndSendsMoney()
+        public
+        raffleEnterAndTimePassed
+    {
+        uint256 additionalEntrance = 5;
+        for (uint256 i = 1; i < 1 + additionalEntrance; i++) {
+            address player = address(uint160(i));
+            hoax(player, STARTING_USER_BALANCE);
+            raffle.enterRaffle{value: entranceFee}();
+        }
+
+        uint256 prize = entranceFee * (additionalEntrance + 1);
+
+        vm.recordLogs();
+        raffle.performUpkeep("");
+        Vm.Log[] memory entries = vm.getRecordedLogs();
+        bytes32 requestId = entries[0].topics[0];
+
+        uint256 previousTimeStamp = raffle.getLastTimeStamp();
+
+        VRFCoordinatorV2Mock(vrfCoordinator).fulfillRandomWords(
+            uint256(requestId),
+            address(raffle)
+        );
+
+        assert(uint256(raffle.getRaffleState()) == 0);
+        assert(raffle.getRecentWinner() != address(0));
+        assert(raffle.getLengthOfPlayers() != 0);
+        assert(previousTimeStamp < raffle.getLastTimeStamp());
+        assert(
+            raffle.getRecentWinner().balance == STARTING_USER_BALANCE + prize
+        );
     }
 }
